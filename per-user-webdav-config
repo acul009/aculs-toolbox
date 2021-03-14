@@ -1,0 +1,59 @@
+server {
+    listen [::]:443 ssl;
+    listen 443 ssl;
+    # I use certbot, which will automagically insert the neccesary certificates
+    
+    #Where you want your files to reside. Each enabled user needs a subfolder.
+    #e.g.: user d_duck needs a directory /var/www/webdav/d_duck"
+    set $webdav_base "/var/www/webdav";
+    set $webdav_root "${webdav_base}/${remote_user}";
+    server_name <yourhost>;
+    root $webdav_root;
+    
+    #password file
+    auth_basic              "Please Login";
+    auth_basic_user_file    /etc/nginx/.passwords.list;
+    
+    #increase timeouts and max file size
+    send_timeout 3600;
+    client_body_timeout 3600;
+    keepalive_timeout 3600;
+    lingering_timeout 3600;
+    client_max_body_size 10G;
+    
+    #General trailing slash fix
+    if (-d $request_filename) {
+        rewrite ^(.*[^/])$ $1/;
+    }
+    
+    location / {
+    
+        dav_methods PUT DELETE MKCOL COPY MOVE;
+        dav_ext_methods PROPFIND OPTIONS LOCK UNLOCK;
+        dav_ext_lock zone=foo;
+        create_full_put_path on;
+        min_delete_depth	0;
+        dav_access		user:rw group:rw;
+        
+        #directory create trailing slash fix
+        if ($request_method = MKCOL) {
+            rewrite ^(.*[^/])$ $1/ break;
+        }
+        
+        #trailing slash fix for copy and move
+        set $destination $http_destination;
+        set $trailing_slash "";
+        if (-d $request_filename) {
+            set $trailing_slash "/";
+        }
+        if ($destination ~ ^https?://[^/]*(.*)/?$) {
+            more_set_input_headers "Destination: $1$trailing_slash";
+        }
+
+        #browser support
+        autoindex		on;
+        autoindex_exact_size	off;
+        autoindex_localtime	on;
+    }
+    
+}
