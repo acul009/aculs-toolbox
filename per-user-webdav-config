@@ -40,6 +40,11 @@ server {
             rewrite ^(.*[^/])$ $1/ break;
         }
         
+        if ($request_method = PROPPATCH) { # Unsupported, allways return OK.
+            add_header	Content-Type 'text/xml';
+            return		207 '<?xml version="1.0"?><a:multistatus    xmlns:a="DAV:"><a:response><a:propstat><a:status>HTTP/1.1 200 OK</a:status></a:propstat></a:response></a:multistatus>';
+        }
+        
         #trailing slash fix for copy and move
         set $destination $http_destination;
         set $trailing_slash "";
