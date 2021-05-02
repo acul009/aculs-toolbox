@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>RSA-Gen</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+      * {
+        color: white;
+      }
+
+      html {
+        background: rgb(32,32,32);
+        margin: 0;
+      }
+
+      html,body {
+        width: 100%;
+      }
+
+      #headline {
+        text-align: center;
+      }
+
+      #inputContainer {
+        width: 100%;
+        padding: 10%;
+      }
+
+      #messageContainer, #keyInputContainer {
+        width: 100%;
+      }
+
+      textarea {
+        background: rgb(24,24,24);
+        border: none;
+        outline:none;
+        padding:  10px;
+      }
+
+      button {
+        background: black;
+        border: 2px solid black;
+        padding: 10px;
+        transition-duration: 0.3s;
+      }
+
+      button:hover {
+        color: red;
+        border-color:red;
+      }
+
+      button:active {
+        color: rgb(0,255,0);
+        border-color: rgb(0,255,0);
+        transition-duration: 0s;
+      }
+
+      #keyInput , #messageInput, #publicKeyInput {
+        min-height: 12vh;
+        width: 80%;
+        box-sizing: border-box;
+      }
+
+      #keyStatus {
+        width: 80%;
+        box-sizing: border-box;
+        padding: 10px;
+        min-height: 4vh;
+      }
+    </style>
+    <script>
+      const privateFormat = "pkcs8";
+      const publicFormat = "spki";
+      const algName = "RSA-OAEP";
+      const alg = {
+        name: algName,
+        modulusLength: 4096,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256"
+      };
+      const algImport = {
+        name: algName,
+        hash: "SHA-256"
+      };
+      const actions = [
+        "encrypt",
+        "decrypt"
+      ];
+      var keyPair;
+      const privateKeyPrefix = "-----BEGIN PRIVATE KEY-----\n";
+      const privateKeySuffix = "\n-----END PRIVATE KEY-----";
+      const publicKeyPrefix = "-----BEGIN PUBLIC KEY-----\n";
+      const publicKeySuffix = "\n-----END PUBLIC KEY-----";
+      window.addEventListener('load', function () {
+        loadKeyPair();
+        document.getElementById('Generate').addEventListener('click', function () {
+          if (keyPair === undefined || confirm('You already have a Keypair. Do you want to create a new one?')) {
+            setKeyStatus('Generating...');
+            window.crypto.subtle.generateKey(
+                    alg,
+                    true,
+                    actions,
+                    ).then(function (newKeyPair) {
+              saveKey(newKeyPair);
+              setKeyStatus('Keypair ready!');
+            });
+          }
+        });
+        document.getElementById('Clear').addEventListener('click', async function () {
+          if (confirm('Are you sure you want to clear your Keypair from this browser?')) {
+            keyPair = undefined;
+            window.localStorage.removeItem('keyPair');
+            setKeyStatus('No Keypair');
+          }
+        });
+        document.getElementById('Import').addEventListener('click', async function () {
+          await importKeyPair(document.getElementById('keyInput').value)
+          saveKey();
+        });
+        document.getElementById('Export').addEventListener('click', async function () {
+          var keyExport = await exportKey(false);
+          var keyInput = document.getElementById('keyInput');
+          keyInput.value = keyExport;
+          keyInput.select();
+          keyInput.setSelectionRange(0, 99999);
+          document.execCommand("copy");
+          setKeyStatus('Keypair exported and copied to clipboard');
+        });
+        document.getElementById('copyKey').addEventListener('click', async function () {
+          var keyExport = await exportKey(true);
+          var keyInput = document.getElementById('keyInput');
+          keyInput.value = keyExport;
+          keyInput.select();
+          keyInput.setSelectionRange(0, 99999);
+          document.execCommand("copy");
+          setKeyStatus('Public Key exported and copied to clipboard');
+        });
+        document.getElementById('Encrypt').addEventListener('click', async function () {
+          var input = document.getElementById('messageInput');
+          var public = await getRecipientKey();
+          var message = str2ab(input.value);
+          var crypt = await window.crypto.subtle.encrypt(alg, public, message);
+          input.value = window.btoa(ab2str(crypt));
+        });
+        document.getElementById('Decrypt').addEventListener('click', async function () {
+          var input = document.getElementById('messageInput');
+          var crypt = str2ab(window.atob(input.value));
+          var message = await window.crypto.subtle.decrypt(alg, keyPair.privateKey, crypt);
+          input.value = ab2str(message);
+        });
+      });
+      function setKeyStatus(status) {
+        document.getElementById('keyStatus').textContent = status;
+      }
+
+      async function saveKey(newKeyPair) {
+        if (newKeyPair !== undefined) {
+          keyPair = newKeyPair;
+        }
+        window.localStorage.setItem('keyPair', await exportKey(false));
+      }
+
+      function loadKeyPair() {
+        var keyPairJson = window.localStorage.getItem('keyPair');
+        if (keyPairJson !== null) {
+          importKeyPair(keyPairJson);
+        }
+      }
+
+      async function importKeyPair(importString) {
+        setKeyStatus('Importing Key...');
+        keyPair = {};
+        var privateKeyStart = importString.indexOf(privateKeyPrefix);
+        var privateKeyStop = importString.indexOf(privateKeySuffix, privateKeyStart);
+        var privateKeyString = importString.substring(privateKeyStart + privateKeyPrefix.length, privateKeyStop);
+        var privateKeyData = str2ab(window.atob(privateKeyString));
+        var privateKey = await window.crypto.subtle.importKey(
+                privateFormat,
+                privateKeyData,
+                algImport,
+                true,
+                ["decrypt"]
+                );
+        keyPair.privateKey = privateKey;
+        var publicKeyStart = importString.indexOf(publicKeyPrefix);
+        var publicKeyStop = importString.indexOf(publicKeySuffix, publicKeyStart);
+        var publicKeyString = importString.substring(publicKeyStart + publicKeyPrefix.length, publicKeyStop);
+        var publicKeyData = str2ab(window.atob(publicKeyString));
+        var publicKey = await window.crypto.subtle.importKey(
+                publicFormat,
+                publicKeyData,
+                algImport,
+                true,
+                ["encrypt"]
+                );
+        keyPair.publicKey = publicKey;
+        setKeyStatus('Keypair ready!');
+      }
+
+      function getRecipientKey() {
+        var importString = document.getElementById('publicKeyInput').value;
+        var publicKeyStart = importString.indexOf(publicKeyPrefix);
+        var publicKeyStop = importString.indexOf(publicKeySuffix, publicKeyStart);
+        var publicKeyString = importString.substring(publicKeyStart + publicKeyPrefix.length, publicKeyStop);
+        var publicKeyData = str2ab(window.atob(publicKeyString));
+        return  window.crypto.subtle.importKey(
+                publicFormat,
+                publicKeyData,
+                algImport,
+                true,
+                ["encrypt"]
+                );
+      }
+
+      async function exportKey(publicOnly) {
+        if (keyPair !== undefined) {
+          var private = await window.crypto.subtle.exportKey(privateFormat, keyPair.privateKey);
+          private = window.btoa(ab2str(private));
+          private = privateKeyPrefix + private + privateKeySuffix;
+          var public = await  window.crypto.subtle.exportKey(publicFormat, keyPair.publicKey);
+          public = window.btoa(ab2str(public));
+          public = publicKeyPrefix + public + publicKeySuffix;
+          var keyExport = public;
+          if (!publicOnly) {
+            keyExport += "\n" + private;
+          }
+          return keyExport;
+        }
+      }
+
+      function ab2str(buf) {
+        return String.fromCharCode.apply(null, new Uint8Array(buf));
+      }
+
+      function str2ab(str) {
+        const buf = new ArrayBuffer(str.length);
+        const bufView = new Uint8Array(buf);
+        for (let i = 0, strLen = str.length; i < strLen; i++) {
+          bufView[i] = str.charCodeAt(i);
+        }
+        return buf;
+      }
+    </script>
+  </head>
+  <body>
+    <div>
+      <h1 id = "headline">
+        acul's quick RSA
+      </h1>
+    </div>
+    <div id="inputContainer">
+      <div id="keyInputContainer">
+        <h2>Personal Keypair</h2>
+        <div id="keyStatus">No Keypair</div>
+        <textarea id="keyInput"></textarea>
+        <div id="keyControl">
+          <button id="Generate">Generate Keypair</button>
+          <button id="Export">Export Keypair</button>
+          <button id="Import">Import Keypair</button>
+          <button id="copyKey">Copy Public Key</button>
+          <button id="Clear">Clear Key</button>
+        </div>
+        <div id="keyControl"></div>
+      </div>
+      <div id="messageContainer">
+        <h2>Encrypting</h2>
+        <h3>Public Key of Recipient (only needed for Encryption)</h3>
+        <textarea id="publicKeyInput"></textarea>
+        <h3>Message</h3>
+        <textarea id="messageInput"></textarea>
+        <div id="messageControl">
+          <button id="Encrypt">Encrypt</button>
+          <button id="Decrypt">Decrypt</button>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
