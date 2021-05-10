@@ -10,7 +10,7 @@
       }
 
       html {
-        background: rgb(32,32,32);
+        background: rgb(48,48,48);
         margin: 0;
       }
 
@@ -23,12 +23,11 @@
       }
 
       #inputContainer {
-        width: 100%;
         padding: 0 10%;
       }
 
-      #messageContainer, #keyInputContainer {
-        width: 100%;
+      #messageContainer, #keyInputContainer, #tutorialDiv {
+        padding: 10px;
       }
 
       textarea {
@@ -36,6 +35,7 @@
         border: none;
         outline:none;
         padding:  10px;
+        margin: 10px 0;
       }
 
       button {
@@ -62,11 +62,30 @@
         box-sizing: border-box;
       }
 
-      #keyStatus {
+      #keyStatus, #messageStatus {
         width: 80%;
         box-sizing: border-box;
         padding: 10px;
         min-height: 4vh;
+      }
+
+      details {
+        background: rgb(32,32,32);
+        margin: 10px 0;
+      }
+
+      summary {
+        padding: 10px;
+        font-size: 20px;
+        font-weight: bold;
+        border: 2px solid transparent;
+        transition-duration: 0.3s;
+        cursor: pointer;
+      }
+
+      summary:hover {
+        color: red;
+        border-color: red;
       }
     </style>
     <script>
@@ -75,7 +94,7 @@
       const algName = "RSA-OAEP";
       const alg = {
         name: algName,
-        modulusLength: 4096,
+        modulusLength: 6144,
         publicExponent: new Uint8Array([1, 0, 1]),
         hash: "SHA-256"
       };
@@ -115,11 +134,12 @@
           }
         });
         document.getElementById('Import').addEventListener('click', async function () {
-          await importKeyPair(document.getElementById('keyInput').value)
-          saveKey();
+          var importString = document.getElementById('keyInput').value;
+          await importKeyPair(importString)
+          window.localStorage.setItem('keyPair', importString);
         });
         document.getElementById('Export').addEventListener('click', async function () {
-          var keyExport = await exportKey(false);
+          var keyExport = window.localStorage.getItem('keyPair');
           var keyInput = document.getElementById('keyInput');
           keyInput.value = keyExport;
           keyInput.select();
@@ -128,13 +148,18 @@
           setKeyStatus('Keypair exported and copied to clipboard');
         });
         document.getElementById('copyKey').addEventListener('click', async function () {
-          var keyExport = await exportKey(true);
-          var keyInput = document.getElementById('keyInput');
-          keyInput.value = keyExport;
-          keyInput.select();
-          keyInput.setSelectionRange(0, 99999);
-          document.execCommand("copy");
-          setKeyStatus('Public Key exported and copied to clipboard');
+          if (keyPair !== undefined) {
+            var keyExport = extractElementFromString(window.localStorage.getItem('keyPair'), "PUBLIC KEY");
+            keyExport = getElementString(keyExport, "PUBLIC KEY");
+            var keyInput = document.getElementById('keyInput');
+            keyInput.value = keyExport;
+            keyInput.select();
+            keyInput.setSelectionRange(0, 99999);
+            document.execCommand("copy");
+            setKeyStatus('Public Key exported and copied to clipboard');
+          } else {
+            setKeyStatus('No Keypair');
+          }
         });
         document.getElementById('Encrypt').addEventListener('click', async function () {
           var input = document.getElementById('messageInput');
@@ -142,16 +167,25 @@
           var message = str2ab(input.value);
           var crypt = await window.crypto.subtle.encrypt(alg, public, message);
           input.value = window.btoa(ab2str(crypt));
+          input.select();
+          keyInput.setSelectionRange(0, 99999);
+          document.execCommand("copy");
+          setMessageStatus('Message Encrypted and copied to clipboard');
         });
         document.getElementById('Decrypt').addEventListener('click', async function () {
           var input = document.getElementById('messageInput');
           var crypt = str2ab(window.atob(input.value));
           var message = await window.crypto.subtle.decrypt(alg, keyPair.privateKey, crypt);
           input.value = ab2str(message);
+          setMessageStatus('Message Decrypted');
         });
       });
       function setKeyStatus(status) {
         document.getElementById('keyStatus').textContent = status;
+      }
+
+      function setMessageStatus(status) {
+        document.getElementById('messageStatus').textContent = status
       }
 
       async function saveKey(newKeyPair) {
@@ -171,10 +205,12 @@
       async function importKeyPair(importString) {
         setKeyStatus('Importing Key...');
         keyPair = {};
-        var privateKeyStart = importString.indexOf(privateKeyPrefix);
-        var privateKeyStop = importString.indexOf(privateKeySuffix, privateKeyStart);
-        var privateKeyString = importString.substring(privateKeyStart + privateKeyPrefix.length, privateKeyStop);
-        var privateKeyData = str2ab(window.atob(privateKeyString));
+        var privateKeyString = extractElementFromString(importString, "PRIVATE KEY")
+//        var privateKeyStart = importString.indexOf(privateKeyPrefix);
+//        var privateKeyStop = importString.indexOf(privateKeySuffix, privateKeyStart);
+//        var privateKeyString = importString.substring(privateKeyStart + privateKeyPrefix.length, privateKeyStop);
+//        var privateKeyData = str2ab(window.atob(privateKeyString));
+        var privateKeyData = await decryptWithPassword(privateKeyString);
         var privateKey = await window.crypto.subtle.importKey(
                 privateFormat,
                 privateKeyData,
@@ -215,14 +251,16 @@
 
       async function exportKey(publicOnly) {
         if (keyPair !== undefined) {
-          var private = await window.crypto.subtle.exportKey(privateFormat, keyPair.privateKey);
-          private = window.btoa(ab2str(private));
-          private = privateKeyPrefix + private + privateKeySuffix;
           var public = await  window.crypto.subtle.exportKey(publicFormat, keyPair.publicKey);
           public = window.btoa(ab2str(public));
           public = publicKeyPrefix + public + publicKeySuffix;
           var keyExport = public;
           if (!publicOnly) {
+            var private = await window.crypto.subtle.exportKey(privateFormat, keyPair.privateKey);
+            private = await encryptWithPassword(private);
+//            private = window.btoa(ab2str(private));
+            private = getElementString(private, "PRIVATE KEY");
+            console.log(private);
             keyExport += "\n" + private;
           }
           return keyExport;
@@ -241,6 +279,83 @@
         }
         return buf;
       }
+
+      function getKeyMaterial(password) {
+        if (password === undefined) {
+          password = window.prompt("Enter a Password to encrypt your keypair");
+        }
+        return window.crypto.subtle.importKey(
+                "raw",
+                str2ab(password),
+                "PBKDF2",
+                false,
+                ["deriveBits", "deriveKey"]
+                );
+      }
+
+      async function getPasswordKey(password, salt) {
+        var keyMaterial = await getKeyMaterial(password);
+        return window.crypto.subtle.deriveKey(
+                {
+                  "name": "PBKDF2",
+                  "salt": salt,
+                  "iterations": 100000,
+                  "hash": "SHA-256"
+                },
+                keyMaterial,
+                {"name": "AES-GCM", "length": 256},
+                true,
+                ["encrypt", "decrypt"]
+                );
+      }
+
+      async function encryptWithPassword(plaindata, password) {
+        var salt = crypto.getRandomValues(new Uint8Array(32));
+        var iv = crypto.getRandomValues(new Uint8Array(16));
+        var key = await getPasswordKey(password, salt);
+        var ciphertext = await window.crypto.subtle.encrypt(
+                {
+                  name: "AES-GCM",
+                  iv: iv
+                },
+                key,
+                plaindata
+                );
+        var encodedMessage = getElementString(window.btoa(ab2str(salt)), "SALT");
+        encodedMessage += "\n" + getElementString(window.btoa(ab2str(iv)), "IV");
+        encodedMessage += "\n" + getElementString(window.btoa(ab2str(ciphertext)), "CIPHERDATA");
+        return encodedMessage;
+      }
+
+      async function decryptWithPassword(ciphertext, password) {
+        var iv = str2ab(window.atob(extractElementFromString(ciphertext, 'iv')))
+        var salt = str2ab(window.atob(extractElementFromString(ciphertext, 'salt')))
+        var key = await getPasswordKey(password, salt);
+        var cipherdata = str2ab(window.atob(extractElementFromString(ciphertext, 'CIPHERDATA')))
+        var plaindata = await window.crypto.subtle.decrypt(
+                {
+                  name: "AES-GCM",
+                  iv: iv
+                },
+                key,
+                cipherdata
+                );
+        return plaindata;
+      }
+
+      function extractElementFromString(string, element) {
+        var startMarker = "-----BEGIN " + element.toUpperCase() + "-----\n";
+        var start = string.indexOf(startMarker);
+        var stop = string.indexOf("\n-----END " + element.toUpperCase() + "-----");
+        return string.substring(start + startMarker.length, stop);
+      }
+
+      function getElementString(string, element) {
+        return "-----BEGIN " + element.toUpperCase() + "-----\n" +
+                string +
+                "\n-----END " + element.toUpperCase() + "-----";
+      }
+
     </script>
   </head>
   <body>
@@ -536,30 +651,52 @@
       </div>
     </div>
     <div id="inputContainer">
-      <div id="keyInputContainer">
-        <h2>Personal Keypair</h2>
-        <div id="keyStatus">No Keypair</div>
-        <textarea id="keyInput"></textarea>
-        <div id="keyControl">
-          <button id="Generate">Generate Keypair</button>
-          <button id="Export">Export Keypair</button>
-          <button id="Import">Import Keypair</button>
-          <button id="copyKey">Copy Public Key</button>
-          <button id="Clear">Clear Key</button>
+      <details>
+        <summary>Tutorial</summary>
+        <div id="tutorialDiv">
+          <h3>Sending Messages</h3>
+          <p>1) Ask the person you want to send a message to for their public key
+          <p>2) Paste the public key into the upper textarea in the encryption section
+          <p>3) Write your message into the lower textarea
+          <p>4) Click on encrypt
+          <p>5) Send the encrypted message to the recipient
+          <h3>Receiving Messages</h3>
+          <p>1) Open the keypair settings and generate a key
+          <p>2) Click on copy public key
+          <p>3) Send the public key to the sender
+          <p>4) Paste the encrypted message into the lower textarea in the encryption section
+          <p>5) Click on decrypt
         </div>
-        <div id="keyControl"></div>
-      </div>
-      <div id="messageContainer">
-        <h2>Encrypting</h2>
-        <h3>Public Key of Recipient (only needed for Encryption)</h3>
-        <textarea id="publicKeyInput"></textarea>
-        <h3>Message</h3>
-        <textarea id="messageInput"></textarea>
-        <div id="messageControl">
-          <button id="Encrypt">Encrypt</button>
-          <button id="Decrypt">Decrypt</button>
+      </details>
+      <details>
+        <summary>Keypair Settings</summary>
+        <div id="keyInputContainer">
+          <div id="keyStatus">No Keypair</div>
+          <textarea id="keyInput"></textarea>
+          <div id="keyControl">
+            <button id="copyKey">Copy Public Key</button>
+            <button id="Generate">Generate Keypair</button>
+            <button id="Export">Export Keypair</button>
+            <button id="Import">Import Keypair</button>
+            <button id="Clear">Clear Key</button>
+          </div>
+          <div id="keyControl"></div>
         </div>
-      </div>
+      </details>
+      <details>
+        <summary>Message Encryption</summary>
+        <div id="messageContainer">
+          <h3>Public Key of Recipient (only needed for Encryption)</h3>
+          <textarea id="publicKeyInput"></textarea>
+          <h3>Message</h3>
+          <div id="messageStatus"></div>
+          <textarea id="messageInput"></textarea>
+          <div id="messageControl">
+            <button id="Encrypt">Encrypt</button>
+            <button id="Decrypt">Decrypt</button>
+          </div>
+        </div>
+      </details>
     </div>
   </body>
 </html>
